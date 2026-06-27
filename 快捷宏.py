@@ -6,7 +6,7 @@ import threading
 import time
 import json
 import os
-from typing import List
+from typing import List, Dict
 
 class MacroConfig:
     def __init__(self, name="未命名", hotkey="f8", loop_count=0, actions=None):
@@ -40,12 +40,13 @@ class MacroApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("多快捷键宏控制器 v4.3 (修复刷新)")
+        self.root.title("多快捷键宏控制器 v4.5 (手动刷新)")
         self.root.geometry("800x600")
         self.root.attributes("-topmost", True)
 
         self.macros: List[MacroConfig] = []
         self.current_edit_index = 0
+        self.tree_items: Dict[int, str] = {}
 
         if not self.load_config():
             default_actions = [
@@ -57,8 +58,6 @@ class MacroApp:
 
         self.setup_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        # 启动定时刷新（只刷新状态，不动编辑器）
-        self.light_refresh_timer()
 
     def setup_ui(self):
         self.notebook = ttk.Notebook(self.root)
@@ -93,7 +92,7 @@ class MacroApp:
         btn_frame1.pack(fill="x", pady=5)
         ttk.Button(btn_frame1, text="前往编辑器", command=lambda: self.notebook.select(1)).pack(side="right", padx=5)
         ttk.Button(btn_frame1, text="保存配置到文件", command=self.save_config_gui).pack(side="left", padx=5)
-        ttk.Button(btn_frame1, text="刷新列表", command=self.full_refresh).pack(side="left", padx=5)
+        ttk.Button(btn_frame1, text="刷新列表", command=self.full_rebuild_tree).pack(side="left", padx=5)
 
         # ===== 页面2：编辑器 =====
         self.page2 = ttk.Frame(self.notebook)
@@ -131,7 +130,9 @@ class MacroApp:
         ttk.Button(btn_af, text="停止此宏", command=self.stop_current_macro).pack(side="left", padx=2)
         ttk.Button(btn_af, text="格式化JSON", command=self.format_actions_json).pack(side="left", padx=2)
 
-        self.full_refresh()   # 首次加载编辑器
+        # 初始化完整刷新（仅一次）
+        self.full_rebuild_tree()
+        self.load_macro_to_editor(0)
 
     # ---------- 配置保存/加载 ----------
     def save_config_to_file(self):
@@ -162,55 +163,33 @@ class MacroApp:
         if self.save_config_to_file():
             messagebox.showinfo("成功", "配置已保存到 " + self.CONFIG_FILE)
 
-    # ---------- 刷新逻辑 ----------
-    def full_refresh(self):
-        """完全刷新：更新树、下拉列表，并重新加载当前宏到编辑器"""
-        # 更新树
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for m in self.macros:
+    # ---------- 手动刷新树与下拉列表 ----------
+    def full_rebuild_tree(self):
+        """完全重建列表和下拉框（用户手动刷新）"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.tree_items.clear()
+
+        for i, m in enumerate(self.macros):
             status = "运行中" if m.running else "空闲"
             loop_text = "无限" if m.loop_count == 0 else str(m.loop_count)
-            self.tree.insert("", "end", values=(m.hotkey, m.name, status, loop_text))
-        
-        # 更新下拉列表并加载编辑器
+            item_id = self.tree.insert("", "end", values=(m.hotkey, m.name, status, loop_text))
+            self.tree_items[i] = item_id
+
         self.update_combo_list()
-        if self.macros and self.current_edit_index >= 0:
-            self.load_macro_to_editor(self.current_edit_index)
-
-    def light_refresh(self):
-        """轻量刷新：仅更新树和下拉列表的文字状态，不触碰编辑器内容"""
-        # 更新树
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for m in self.macros:
-            status = "运行中" if m.running else "空闲"
-            loop_text = "无限" if m.loop_count == 0 else str(m.loop_count)
-            self.tree.insert("", "end", values=(m.hotkey, m.name, status, loop_text))
-        
-        # 更新下拉列表（仅更新选项文字，不重新加载编辑器）
-        names = [f"{m.name} ({m.hotkey})" for m in self.macros]
-        self.combo_macro['values'] = names
-        if self.macros and self.current_edit_index >= 0:
-            # 保持当前选中项，但不触发编辑器加载
-            self.combo_macro.current(self.current_edit_index)
-
-    def light_refresh_timer(self):
-        """定时调用轻量刷新"""
-        self.light_refresh()
-        self.root.after(500, self.light_refresh_timer)
 
     def update_combo_list(self):
-        """仅更新下拉列表的选项值（由 full_refresh 调用）"""
+        """更新下拉列表选项"""
         names = [f"{m.name} ({m.hotkey})" for m in self.macros]
         self.combo_macro['values'] = names
         if self.macros:
             if self.current_edit_index < 0 or self.current_edit_index >= len(self.macros):
                 self.current_edit_index = 0
             self.combo_macro.current(self.current_edit_index)
+        else:
+            self.combo_macro.set('')
 
     def load_macro_to_editor(self, index):
-        """将宏数据加载到编辑控件（会覆盖当前编辑内容）"""
         if 0 <= index < len(self.macros):
             macro = self.macros[index]
             self.entry_name.delete(0, tk.END)
@@ -224,7 +203,6 @@ class MacroApp:
             self.current_edit_index = index
 
     def on_combo_select(self, event=None):
-        """用户手动选择下拉框时加载宏"""
         idx = self.combo_macro.current()
         if idx >= 0:
             self.load_macro_to_editor(idx)
@@ -234,7 +212,8 @@ class MacroApp:
         new_m = MacroConfig("新建宏", "f1", 1, [])
         self.macros.append(new_m)
         self.current_edit_index = len(self.macros) - 1
-        self.full_refresh()   # 完全刷新，加载新宏编辑器
+        self.full_rebuild_tree()
+        self.load_macro_to_editor(self.current_edit_index)
 
     def delete_macro(self):
         if self.current_edit_index == -1 or not self.macros:
@@ -251,7 +230,7 @@ class MacroApp:
                 self.current_edit_index = min(self.current_edit_index, len(self.macros)-1)
             else:
                 self.current_edit_index = -1
-            self.full_refresh()
+            self.full_rebuild_tree()
 
     def save_current_macro(self):
         if self.current_edit_index == -1:
@@ -266,7 +245,6 @@ class MacroApp:
         if not new_name:
             messagebox.showerror("错误", "名称不能为空")
             return
-
         try:
             loop = int(loop_str)
             if loop < 0:
@@ -274,7 +252,6 @@ class MacroApp:
         except ValueError:
             messagebox.showerror("错误", "循环次数必须为非负整数 (0 表示无限)")
             return
-
         try:
             actions = json.loads(raw_actions)
             if not isinstance(actions, list):
@@ -283,13 +260,13 @@ class MacroApp:
             messagebox.showerror("JSON格式错误", f"动作序列无效:\n{str(e)}")
             return
 
-        # 所有验证通过，修改宏对象
         macro.name = new_name
         macro.hotkey = new_hotkey
         macro.loop_count = loop
         macro.actions = actions
 
-        self.full_refresh()   # 保存后完全刷新界面（包括重新加载编辑器，保持显示最新）
+        self.full_rebuild_tree()
+        self.load_macro_to_editor(self.current_edit_index)
         messagebox.showinfo("成功", "宏已保存！")
 
     def format_actions_json(self):
@@ -306,7 +283,7 @@ class MacroApp:
     def test_run_macro(self):
         if self.current_edit_index == -1:
             return
-        self.save_current_macro()   # 会自动调用 full_refresh
+        self.save_current_macro()
         macro = self.macros[self.current_edit_index]
         if macro.running:
             messagebox.showinfo("提示", "该宏已在运行，请先停止")
