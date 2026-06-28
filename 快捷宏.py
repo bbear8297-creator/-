@@ -40,7 +40,7 @@ class MacroApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("多快捷键宏控制器 v4.5 (手动刷新)")
+        self.root.title("快捷宏(手动刷新)")
         self.root.geometry("800x600")
         self.root.attributes("-topmost", True)
 
